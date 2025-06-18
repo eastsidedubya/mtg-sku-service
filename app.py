@@ -251,26 +251,29 @@ def get_sku_by_uuid(uuid):
 
             final_filtered_skus = []
             for sku in skus_for_uuid:
-                sku_condition = sku.get('condition', '')
-                sku_printing = sku.get('printing', '')
+                # Convert SKU's actual condition and printing to a consistent case (e.g., lower) for comparison
+                sku_condition_lower = sku.get('condition', '').lower()
+                sku_printing_lower = sku.get('printing', '').lower()
                 
-                # Match condition:
-                # - If requested_conditions is empty, it's a pass (no condition filter from client).
-                # - Else, sku_condition must be in requested_conditions.
-                condition_match = not requested_conditions or sku_condition in requested_conditions
+                # Convert requested conditions and printings to lower case for comparison
+                # Do this once outside the loop if performance is critical for many requested_conditions/printings,
+                # but for single items from Apps Script, this is fine.
+                requested_conditions_lower = [cond.lower() for cond in requested_conditions]
+                requested_printings_lower = [prnt.lower() for prnt in requested_printings]
+
+                # Match condition (case-insensitive):
+                condition_match = not requested_conditions_lower or sku_condition_lower in requested_conditions_lower
                 
-                # Match printing:
-                # - If requested_printings is empty, it's a pass (no printing filter from client).
-                # - Else, sku_printing must be in requested_printings.
-                printing_match = not requested_printings or sku_printing in requested_printings
+                # Match printing (case-insensitive):
+                printing_match = not requested_printings_lower or sku_printing_lower in requested_printings_lower
                 
                 if condition_match and printing_match:
                     final_filtered_skus.append({
                         'skuId': sku.get('skuId'),
                         'productId': sku.get('productId'),
-                        'condition': sku_condition,
-                        'printing': sku_printing,
-                        'language': sku.get('language') # Assuming language is always English due to initial processing
+                        'condition': sku.get('condition'), # Return original casing
+                        'printing': sku.get('printing'),   # Return original casing
+                        'language': sku.get('language')
                     })
             
             if final_filtered_skus:
