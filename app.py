@@ -208,53 +208,25 @@ def get_skus():
 
 @app.route('/sku/<uuid>', methods=['GET'])
 def get_sku_by_uuid(uuid):
-    """Get SKUs for a single UUID"""
+    """Get SKUs for a single UUID - DEBUG VERSION"""
     
-    # Check if we need to load data
-    updating = ensure_data_loaded()
-    
-    # If no data and not updating, return error
-    if not sku_data and not updating:
-        return jsonify({
-            'error': 'SKU data not available. Try calling /update first.',
-            'suggestion': 'POST to /update endpoint to initialize data'
-        }), 503
-    
-    # If data is updating, let user know
-    if updating:
-        return jsonify({
-            'message': 'SKU data is being updated. Please try again in a few minutes.',
-            'is_updating': True
-        }), 202
+    # Check if data needs updating
+    if needs_update():
+        logger.info("SKU data needs updating...")
+        download_and_process_skus()
     
     try:
-        # Get query parameters
-        conditions = request.args.getlist('condition') or [
-            'Near Mint', 'Lightly Played', 'Moderately Played', 
-            'Heavily Played', 'Damaged'
-        ]
-        printings = request.args.getlist('printing') or ['Normal', 'Foil']
-        
         if uuid in sku_data:
-            # Filter by condition and printing
-            filtered_skus = []
-            for sku in sku_data[uuid]:
-                condition = sku.get('condition', '')
-                printing = sku.get('printing', '')
-                
-                if condition in conditions and printing in printings:
-                    filtered_skus.append({
-                        'skuId': sku.get('skuId'),
-                        'productId': sku.get('productId'),
-                        'condition': condition,
-                        'printing': printing,
-                        'language': sku.get('language')
-                    })
+            # DEBUG: Return ALL data without filtering
+            raw_skus = sku_data[uuid]
+            logger.info(f"DEBUG: Raw SKUs for {uuid}: {raw_skus}")
             
             return jsonify({
                 'success': True,
                 'uuid': uuid,
-                'skus': filtered_skus
+                'skus': raw_skus,  # Return everything
+                'total_skus': len(raw_skus),
+                'debug': True
             })
         else:
             return jsonify({
@@ -267,6 +239,7 @@ def get_sku_by_uuid(uuid):
     except Exception as e:
         logger.error(f"Error processing single SKU request: {str(e)}")
         return jsonify({'error': 'Internal server error'}), 500
+
 
 if __name__ == '__main__':
     # Don't download data on startup - do it on demand
