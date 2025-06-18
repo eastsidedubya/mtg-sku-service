@@ -208,44 +208,98 @@ def get_skus():
 
 @app.route('/sku/<uuid>', methods=['GET'])
 def get_sku_by_uuid(uuid):
-    """Get SKUs for a single UUID - DEBUG VERSION"""
+    """Get SKUs for a single UUID, filtered by query parameters."""
     
-    # Check if data needs updating
-    if needs_update():
-        logger.info("SKU data needs updating...")
-        download_and_process_skus()
-    
+    # ensure_data_loaded() returns True if an update was *just started* by this call,
+    # or False if data is considered loaded or an update was already in progress.
+    update_was_just_triggered = ensure_data_loaded()
+
+    # Scenario 1: Data is not loaded, and an update is (or was just) in progress.
+    if not sku_data and (is_updating or update_was_just_triggered):
+        logger.info(f"Data for /sku/{uuid} not yet available, update in progress. is_updating: {is_updating}, triggered_now: {update_was_just_triggered}")
+        return jsonify({
+            'message': 'SKU data is being loaded/updated. Please try again in a few minutes.',
+            'is_updating': True  # Reflects the current state
+        }), 202
+
+    # Scenario 2: Data is not loaded, and no update is active (e.g., initial state before first call, or previous update failed).
+    if not sku_data:
+        logger.error(f"Data request for /sku/{uuid} but no SKU data is loaded and no update is active.")
+        return jsonify({
+            'error': 'SKU data not available. An update might be in progress, has failed, or needs to be triggered. Try POSTing to /update or check service logs.',
+            'is_updating': is_updating # is_updating would be false here if ensure_data_loaded didn't start one
+        }), 503
+
+    # Scenario 3: Data is loaded. Proceed to filter.
     try:
         if uuid in sku_data:
-            # DEBUG: Return ALL data without filtering
-            raw_skus = sku_data[uuid]
-            logger.info(f"DEBUG: Raw SKUs for {uuid}: {raw_skus}")
+            skus_for_uuid = sku_data[uuid]
             
-            return jsonify({
-                'success': True,
-                'uuid': uuid,
-                'skus': raw_skus,  # Return everything
-                'total_skus': len(raw_skus),
-                'debug': True
-            })
+            # Get filter parameters from query string.
+            # request.args.getlist('param_name') gets all values for a repeated query parameter.
+            # If the parameter is not present, it returns an empty list.
+            requested_conditions = request.args.getlist('condition')
+            requested_printings = request.args.getlist('printing')
+
+            logger.info(f"Request for UUID {uuid}. Requested conditions: {requested_conditions}, Requested printings: {requested_printings}")
+
+            # If no specific conditions/printings are passed via query params,
+            # the lists will be empty. The client-side (Apps Script) should send defaults.
+            # If for some reason they are empty, we might return all or apply server-side defaults.
+            # For now, we'll filter strictly: if a filter list is empty, it means "don't filter on this".
+            # However, our Apps Script now sends specific single-item lists.
+
+            final_filtered_skus = []
+            for sku in skus_for_uuid:
+                sku_condition = sku.get('condition', '')
+                sku_printing = sku.get('printing', '')
+                
+                # Match condition:
+                # - If requested_conditions is empty, it's a pass (no condition filter from client).
+                # - Else, sku_condition must be in requested_conditions.
+                condition_match = not requested_conditions or sku_condition in requested_conditions
+                
+                # Match printing:
+                # - If requested_printings is empty, it's a pass (no printing filter from client).
+                # - Else, sku_printing must be in requested_printings.
+                printing_match = not requested_printings or sku_printing in requested_printings
+                
+                if condition_match and printing_match:
+                    final_filtered_skus.append({
+                        'skuId': sku.get('skuId'),
+                        'productId': sku.get('productId'),
+                        'condition': sku_condition,
+                        'printing': sku_printing,
+                        'language': sku.get('language') # Assuming language is always English due to initial processing
+                    })
+            
+            if final_filtered_skus:
+                logger.info(f"Found {len(final_filtered_skus)} SKUs for UUID {uuid} matching criteria.")
+                return jsonify({
+                    'success': True,
+                    'uuid': uuid,
+                    'skus': final_filtered_skus,
+                    'total_skus_found': len(final_filtered_skus)
+                })
+            else:
+                logger.info(f"No SKUs found for UUID {uuid} matching criteria. Conditions: {requested_conditions}, Printings: {requested_printings}")
+                return jsonify({
+                    'success': True, # Request was successful, but no data matched
+                    'uuid': uuid,
+                    'skus': [],
+                    'message': 'No SKUs found matching the specified condition and printing.',
+                    'total_skus_found': 0
+                })
         else:
+            logger.info(f"UUID {uuid} not found in SKU data.")
             return jsonify({
                 'success': False,
                 'uuid': uuid,
                 'error': 'UUID not found',
                 'skus': []
-            })
-            
+            }), 404 # Not Found status for missing UUID
+
     except Exception as e:
-        logger.error(f"Error processing single SKU request: {str(e)}")
-        return jsonify({'error': 'Internal server error'}), 500
-
-
-if __name__ == '__main__':
-    # Don't download data on startup - do it on demand
-    logger.info("Starting Flask application (data will be loaded on demand)...")
-    
-    # Run the app
-    port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port, debug=False)
+        logger.error(f"Error processing single SKU request for UUID {uuid}: {str(e)}")
+        return jsonify({'error': 'Internal server error processing your request'}), 500
 
