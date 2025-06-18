@@ -249,23 +249,42 @@ def get_sku_by_uuid(uuid):
             # For now, we'll filter strictly: if a filter list is empty, it means "don't filter on this".
             # However, our Apps Script now sends specific single-item lists.
 
+            # Get filter parameters from query string.
+            requested_conditions = request.args.getlist('condition')
+            requested_printings_from_query = request.args.getlist('printing') # Renamed for clarity
+
+            logger.info(f"Request for UUID {uuid}. Requested conditions: {requested_conditions}, Requested printings from query: {requested_printings_from_query}")
+
             final_filtered_skus = []
             for sku in skus_for_uuid:
-                # Convert SKU's actual condition and printing to a consistent case (e.g., lower) for comparison
                 sku_condition_lower = sku.get('condition', '').lower()
-                sku_printing_lower = sku.get('printing', '').lower()
+                sku_printing_actual_lower = sku.get('printing', '').lower() # Actual printing from data
                 
-                # Convert requested conditions and printings to lower case for comparison
-                # Do this once outside the loop if performance is critical for many requested_conditions/printings,
-                # but for single items from Apps Script, this is fine.
+                # Convert requested conditions to lower case for comparison
                 requested_conditions_lower = [cond.lower() for cond in requested_conditions]
-                requested_printings_lower = [prnt.lower() for prnt in requested_printings]
+
+                # Process requested printings: map "normal" to "non foil" and convert to lower case
+                processed_requested_printings_lower = []
+                for req_prnt in requested_printings_from_query:
+                    prnt_lower = req_prnt.lower()
+                    if prnt_lower == 'normal':
+                        processed_requested_printings_lower.append('non foil')
+                        # If "normal" could also mean an empty printing field in your data, you could add:
+                        # processed_requested_printings_lower.append('') 
+                    else:
+                        processed_requested_printings_lower.append(prnt_lower)
+                
+                # Remove duplicates if "normal" was mapped and "non foil" was also sent, etc.
+                if processed_requested_printings_lower:
+                    processed_requested_printings_lower = list(set(processed_requested_printings_lower))
 
                 # Match condition (case-insensitive):
                 condition_match = not requested_conditions_lower or sku_condition_lower in requested_conditions_lower
                 
-                # Match printing (case-insensitive):
-                printing_match = not requested_printings_lower or sku_printing_lower in requested_printings_lower
+                # Match printing (case-insensitive, with "normal" mapped to "non foil"):
+                # If processed_requested_printings_lower is empty (e.g. no printing param sent), it's a pass.
+                # Otherwise, the actual SKU printing must be in our processed list.
+                printing_match = not processed_requested_printings_lower or sku_printing_actual_lower in processed_requested_printings_lower
                 
                 if condition_match and printing_match:
                     final_filtered_skus.append({
