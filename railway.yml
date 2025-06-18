@@ -1,4 +1,0 @@
-build:
-  builder: nixpacks
-run:
-  start: gunicorn app:app
