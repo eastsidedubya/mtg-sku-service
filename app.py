@@ -219,71 +219,50 @@ def get_skus():
 def get_sku_by_uuid(uuid):
     """Get SKUs for a single UUID, filtered by query parameters."""
 
-    # ensure_data_loaded() returns True if an update was *just started* by this call,
-    # or False if data is considered loaded or an update was already in progress.
     update_was_just_triggered = ensure_data_loaded()
 
-    # Scenario 1: Data is not loaded, and an update is (or was just) in progress.
     if not sku_data and (is_updating or update_was_just_triggered):
         logger.info(
             f"Data for /sku/{uuid} not yet available, update in progress. is_updating: {is_updating}, triggered_now: {update_was_just_triggered}")
         return jsonify({
             'message': 'SKU data is being loaded/updated. Please try again in a few minutes.',
-            'is_updating': True  # Reflects the current state
+            'is_updating': True
         }), 202
 
-    # Scenario 2: Data is not loaded, and no update is active (e.g., initial state before first call, or previous update failed).
     if not sku_data:
         logger.error(f"Data request for /sku/{uuid} but no SKU data is loaded and no update is active.")
         return jsonify({
             'error': 'SKU data not available. An update might be in progress, has failed, or needs to be triggered. Try POSTing to /update or check service logs.',
-            'is_updating': is_updating  # is_updating would be false here if ensure_data_loaded didn't start one
+            'is_updating': is_updating
         }), 503
 
-    # Scenario 3: Data is loaded. Proceed to filter.
     try:
         if uuid in sku_data:
             skus_for_uuid = sku_data[uuid]
 
-            # Get filter parameters from query string.
-            # request.args.getlist('param_name') gets all values for a repeated query parameter.
-            # If the parameter is not present, it returns an empty list.
             requested_conditions = request.args.getlist('condition')
             requested_printings = request.args.getlist('printing')
 
             logger.info(
                 f"Request for UUID {uuid}. Requested conditions: {requested_conditions}, Requested printings: {requested_printings}")
 
-            # If no specific conditions/printings are passed via query params,
-            # the lists will be empty. The client-side (Apps Script) should send defaults.
-            # If for some reason they are empty, we might return all or apply server-side defaults.
-            # For now, we'll filter strictly: if a filter list is empty, it means "don't filter on this".
-            # However, our Apps Script now sends specific single-item lists.
-
             final_filtered_skus = []
             for sku in skus_for_uuid:
-                # Convert SKU's actual condition and printing to a consistent case (e.g., lower) for comparison
                 sku_condition_lower = sku.get('condition', '').lower()
                 sku_printing_lower = sku.get('printing', '').lower()
 
-                # Convert requested conditions and printings to lower case for comparison
-                # Do this once outside the loop if performance is critical for many requested_conditions/printings,
-                # but for single items from Apps Script, this is fine.
                 requested_conditions_lower = [cond.lower() for cond in requested_conditions]
                 requested_printings_lower = [prnt.lower() for prnt in requested_printings]
 
-                # Match condition (case-insensitive):
                 condition_match = not requested_conditions_lower or sku_condition_lower in requested_conditions_lower
-
-                # Match printing (case-insensitive):
                 printing_match = not requested_printings_lower or sku_printing_lower in requested_printings_lower
 
                 if condition_match and printing_match:
                     final_filtered_skus.append({
                         'skuId': sku.get('skuId'),
                         'productId': sku.get('productId'),
-                        'condition': sku.get('condition'),  # Return original casing
-                        'printing': sku.get('printing'),  # Return original casing
+                        'condition': sku.get('condition'),
+                        'printing': sku.get('printing'),
                         'language': sku.get('language')
                     })
 
@@ -299,7 +278,7 @@ def get_sku_by_uuid(uuid):
                 logger.info(
                     f"No SKUs found for UUID {uuid} matching criteria. Conditions: {requested_conditions}, Printings: {requested_printings}")
                 return jsonify({
-                    'success': True,  # Request was successful, but no data matched
+                    'success': True,
                     'uuid': uuid,
                     'skus': [],
                     'message': 'No SKUs found matching the specified condition and printing.',
@@ -312,7 +291,7 @@ def get_sku_by_uuid(uuid):
                 'uuid': uuid,
                 'error': 'UUID not found',
                 'skus': []
-            }), 404  # Not Found status for missing UUID
+            }), 404
 
     except Exception as e:
         logger.error(f"Error processing single SKU request for UUID {uuid}: {str(e)}")
