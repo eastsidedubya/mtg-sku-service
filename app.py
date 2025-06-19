@@ -299,6 +299,3 @@ def get_sku_by_uuid(uuid):
     except Exception as e:
         logger.error(f"Error processing single SKU request for UUID {uuid}: {str(e)}")
         return jsonify({'error': 'Internal server error processing your request'}), 500
-        'sample_data': sample_data,
-        'total_count': len(mtg_service.sku_data)
-    })
