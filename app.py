@@ -239,10 +239,13 @@ def get_sku_by_uuid(uuid):
     try:
         if uuid in sku_data:
             skus_for_uuid = sku_data[uuid]
-
             requested_conditions = request.args.getlist('condition')
             requested_printings = request.args.getlist('printing')
-
+            
+            # Filter out empty/null values
+            requested_conditions = [c for c in requested_conditions if c and c.strip()]
+            requested_printings = [p for p in requested_printings if p and p.strip()]
+            
             logger.info(
                 f"Request for UUID {uuid}. Requested conditions: {requested_conditions}, Requested printings: {requested_printings}")
 
@@ -296,3 +299,4 @@ def get_sku_by_uuid(uuid):
     except Exception as e:
         logger.error(f"Error processing single SKU request for UUID {uuid}: {str(e)}")
         return jsonify({'error': 'Internal server error processing your request'}), 500
+
