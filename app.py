@@ -12,39 +12,13 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Configuration
-TCGPLAYER_API_URL = 'https://api.tcgplayer.com/catalog/products'
-TCGPLAYER_TOKEN_URL = 'https://api.tcgplayer.com/token'
 MTGJSON_PRICES_URL = 'https://mtgjson.com/api/v5/AllPricesToday.json'
 
 # Cache files
-SKU_CACHE_FILE = 'sku_cache.json'
 PRICE_CACHE_FILE = 'price_cache.json'
 
 # Cache durations (in seconds)
-SKU_CACHE_DURATION = 24 * 60 * 60  # 24 hours
 PRICE_CACHE_DURATION = 24 * 60 * 60  # 24 hours
-
-# Environment variables
-TCGPLAYER_PUBLIC_KEY = os.getenv('TCGPLAYER_PUBLIC_KEY')
-TCGPLAYER_PRIVATE_KEY = os.getenv('TCGPLAYER_PRIVATE_KEY')
-
-def get_tcgplayer_token():
-    """Get TCGPlayer access token"""
-    if not TCGPLAYER_PUBLIC_KEY or not TCGPLAYER_PRIVATE_KEY:
-        logger.error("TCGPlayer API keys not configured")
-        return None
-    
-    try:
-        response = requests.post(TCGPLAYER_TOKEN_URL, data={
-            'grant_type': 'client_credentials',
-            'client_id': TCGPLAYER_PUBLIC_KEY,
-            'client_secret': TCGPLAYER_PRIVATE_KEY
-        })
-        response.raise_for_status()
-        return response.json().get('access_token')
-    except Exception as e:
-        logger.error(f"Error getting TCGPlayer token: {e}")
-        return None
 
 def get_cached_price_data():
     """Get cached price data or fetch fresh if expired"""
@@ -87,45 +61,56 @@ def fetch_fresh_price_data():
         return None
 
 def normalize_condition(condition):
-    """Normalize condition string for matching"""
+    """Normalize condition string for matching MTGJson conditions"""
     if not condition:
-        return 'nearmint'
+        return 'NM'
     
-    # Convert to lowercase and remove spaces/special chars
-    normalized = condition.lower().replace(' ', '').replace('-', '')
+    # Convert to standard MTGJson condition format
+    normalized = condition.strip()
     
-    # Map common variations
+    # Map common variations to MTGJson format
     condition_map = {
-        'nm': 'nearmint',
-        'nearmint': 'nearmint',
-        'mint': 'nearmint',
-        'lp': 'lightlyplayed',
-        'lightlyplayed': 'lightlyplayed',
-        'mp': 'moderatelyplayed',
-        'moderatelyplayed': 'moderatelyplayed',
-        'hp': 'heavilyplayed',
-        'heavilyplayed': 'heavilyplayed',
-        'damaged': 'damaged',
-        'dmg': 'damaged'
+        'Near Mint': 'NM',
+        'near mint': 'NM',
+        'NM': 'NM',
+        'nm': 'NM',
+        'Lightly Played': 'LP',
+        'lightly played': 'LP',
+        'LP': 'LP',
+        'lp': 'LP',
+        'Moderately Played': 'MP',
+        'moderately played': 'MP',
+        'MP': 'MP',
+        'mp': 'MP',
+        'Heavily Played': 'HP',
+        'heavily played': 'HP',
+        'HP': 'HP',
+        'hp': 'HP',
+        'Damaged': 'DMG',
+        'damaged': 'DMG',
+        'DMG': 'DMG',
+        'dmg': 'DMG'
     }
     
     return condition_map.get(normalized, normalized)
 
 def normalize_printing(printing):
-    """Normalize printing string for matching"""
+    """Normalize printing string for matching MTGJson printing types"""
     if not printing:
         return 'normal'
     
-    normalized = printing.lower().replace(' ', '')
+    normalized = printing.lower().strip()
     
-    # Map common variations
+    # Map common variations to MTGJson format
     printing_map = {
         'normal': 'normal',
         'regular': 'normal',
+        'non-foil': 'normal',
+        'nonfoil': 'normal',
         'foil': 'foil',
         'etched': 'etched',
-        'showcase': 'normal',
-        'borderless': 'normal'
+        'showcase': 'normal',  # Showcase is usually normal finish
+        'borderless': 'normal'  # Borderless is usually normal finish
     }
     
     return printing_map.get(normalized, normalized)
@@ -134,14 +119,46 @@ def normalize_printing(printing):
 def health_check():
     return jsonify({
         'status': 'healthy',
-        'service': 'MTG SKU and Price Service',
-        'version': '2.0.0',
+        'service': 'MTG Price Service',
+        'version': '2.1.0',
         'endpoints': [
             '/price/<uuid>',
+            '/price/<uuid>/debug',
             '/refresh-price-cache',
             '/cache-status'
         ]
     })
+
+@app.route('/price/<uuid>/debug')
+def debug_price_structure(uuid):
+    """Debug endpoint to see the actual price data structure for a UUID"""
+    try:
+        price_data = get_cached_price_data()
+        if not price_data:
+            return jsonify({
+                'success': False,
+                'error': 'Price data not available'
+            }), 503
+        
+        if uuid not in price_data:
+            return jsonify({
+                'success': False,
+                'error': f'No price data found for UUID: {uuid}'
+            }), 404
+        
+        # Return the raw structure for this UUID
+        return jsonify({
+            'success': True,
+            'uuid': uuid,
+            'raw_data': price_data[uuid]
+        })
+        
+    except Exception as e:
+        logger.error(f"Error in debug_price_structure: {e}")
+        return jsonify({
+            'success': False,
+            'error': 'Internal server error'
+        }), 500
 
 @app.route('/price/<uuid>')
 def get_price(uuid):
@@ -162,7 +179,9 @@ def get_price(uuid):
         normalized_conditions = [normalize_condition(c) for c in conditions]
         normalized_printings = [normalize_printing(p) for p in printings]
         
-        logger.info(f"Fetching price for UUID: {uuid}, conditions: {normalized_conditions}, printings: {normalized_printings}")
+        logger.info(f"Fetching price for UUID: {uuid}")
+        logger.info(f"Original conditions: {conditions} -> Normalized: {normalized_conditions}")
+        logger.info(f"Original printings: {printings} -> Normalized: {normalized_printings}")
         
         # Get price data
         price_data = get_cached_price_data()
@@ -176,57 +195,85 @@ def get_price(uuid):
         if uuid not in price_data:
             return jsonify({
                 'success': False,
-                'error': f'No price data found for UUID: {uuid}'
+                'error': f'No price data found for UUID: {uuid}',
+                'hint': 'Use /price/<uuid>/debug to see available UUIDs'
             }), 404
         
         card_prices = price_data[uuid]
         
-        # Navigate to paper -> provider -> retail
-        if ('paper' not in card_prices or 
-            provider not in card_prices['paper'] or 
-            'retail' not in card_prices['paper'][provider]):
+        # MTGJson structure: paper -> provider -> retail -> finish -> condition -> price
+        if ('paper' not in card_prices):
             return jsonify({
                 'success': False,
-                'error': f'No {provider} retail price data for UUID: {uuid}'
+                'error': f'No paper price data for UUID: {uuid}',
+                'available_formats': list(card_prices.keys()) if isinstance(card_prices, dict) else []
+            }), 404
+        
+        if (provider not in card_prices['paper']):
+            return jsonify({
+                'success': False,
+                'error': f'No {provider} price data for UUID: {uuid}',
+                'available_providers': list(card_prices['paper'].keys()) if isinstance(card_prices['paper'], dict) else []
+            }), 404
+        
+        if ('retail' not in card_prices['paper'][provider]):
+            return jsonify({
+                'success': False,
+                'error': f'No retail price data for {provider} for UUID: {uuid}',
+                'available_types': list(card_prices['paper'][provider].keys()) if isinstance(card_prices['paper'][provider], dict) else []
             }), 404
         
         retail_prices = card_prices['paper'][provider]['retail']
         found_prices = []
         
-        # Find matching prices
-        for condition in normalized_conditions:
-            if condition in retail_prices:
-                for printing in normalized_printings:
-                    if printing in retail_prices[condition]:
-                        price_value = retail_prices[condition][printing]
-                        if price_value is not None:
-                            found_prices.append({
-                                'condition': condition,
-                                'printing': printing,
-                                'price': price_value,
-                                'provider': provider
-                            })
+        # Navigate: retail -> finish -> condition -> price
+        for printing in normalized_printings:
+            if printing in retail_prices:
+                finish_data = retail_prices[printing]
+                if isinstance(finish_data, dict):
+                    for condition in normalized_conditions:
+                        if condition in finish_data:
+                            price_value = finish_data[condition]
+                            if price_value is not None:
+                                found_prices.append({
+                                    'condition': condition,
+                                    'printing': printing,
+                                    'price': float(price_value),
+                                    'provider': provider
+                                })
         
         if found_prices:
             return jsonify({
                 'success': True,
                 'uuid': uuid,
-                'prices': found_prices
+                'prices': found_prices,
+                'total_found': len(found_prices)
             })
         else:
+            # Provide debugging information
+            available_finishes = list(retail_prices.keys()) if isinstance(retail_prices, dict) else []
+            available_conditions = {}
+            
+            for finish in available_finishes:
+                if isinstance(retail_prices[finish], dict):
+                    available_conditions[finish] = list(retail_prices[finish].keys())
+            
             return jsonify({
                 'success': False,
                 'error': 'No matching prices found for specified criteria',
-                'available_conditions': list(retail_prices.keys()) if retail_prices else [],
                 'requested_conditions': normalized_conditions,
-                'requested_printings': normalized_printings
+                'requested_printings': normalized_printings,
+                'available_finishes': available_finishes,
+                'available_conditions': available_conditions,
+                'hint': f'Use /price/{uuid}/debug to see full structure'
             }), 404
             
     except Exception as e:
         logger.error(f"Error in get_price: {e}")
         return jsonify({
             'success': False,
-            'error': 'Internal server error'
+            'error': 'Internal server error',
+            'details': str(e)
         }), 500
 
 @app.route('/refresh-price-cache', methods=['POST'])
@@ -235,10 +282,16 @@ def refresh_price_cache():
     try:
         price_data = fetch_fresh_price_data()
         if price_data:
+            # Get some stats about the data
+            total_cards = len(price_data)
+            sample_uuid = list(price_data.keys())[0] if price_data else None
+            
             return jsonify({
                 'success': True,
                 'message': 'Price cache refreshed successfully',
-                'refreshed_at': datetime.now().isoformat()
+                'refreshed_at': datetime.now().isoformat(),
+                'total_cards': total_cards,
+                'sample_uuid': sample_uuid
             })
         else:
             return jsonify({
@@ -249,13 +302,14 @@ def refresh_price_cache():
         logger.error(f"Error refreshing price cache: {e}")
         return jsonify({
             'success': False,
-            'error': 'Internal server error'
+            'error': 'Internal server error',
+            'details': str(e)
         }), 500
 
 @app.route('/cache-status')
 def cache_status():
     """Get status of price cache"""
-    price_status = {'exists': False, 'age_hours': None}
+    price_status = {'exists': False, 'age_hours': None, 'total_cards': 0}
     
     # Check price cache
     if os.path.exists(PRICE_CACHE_FILE):
@@ -264,9 +318,14 @@ def cache_status():
                 cache_data = json.load(f)
             cache_time = datetime.fromisoformat(cache_data.get('cached_at', '1970-01-01'))
             age_hours = (datetime.now() - cache_time).total_seconds() / 3600
-            price_status = {'exists': True, 'age_hours': round(age_hours, 2)}
-        except:
-            pass
+            total_cards = len(cache_data.get('data', {}))
+            price_status = {
+                'exists': True, 
+                'age_hours': round(age_hours, 2),
+                'total_cards': total_cards
+            }
+        except Exception as e:
+            logger.error(f"Error reading cache: {e}")
     
     return jsonify({
         'price_cache': price_status,
