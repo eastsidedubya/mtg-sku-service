@@ -350,3 +350,18 @@ if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
 
+@app.route('/debug/sample-uuids', methods=['GET'])
+def get_sample_uuids():
+    """Get a few sample UUIDs for debugging"""
+    with mtg_service.sku_lock:
+        sample_uuids = list(mtg_service.sku_data.keys())[:10]
+        sample_data = {}
+        for uuid in sample_uuids[:3]:
+            sample_data[uuid] = mtg_service.sku_data[uuid]
+    
+    return jsonify({
+        'success': True,
+        'sample_uuids': sample_uuids,
+        'sample_data': sample_data,
+        'total_count': len(mtg_service.sku_data)
+    })
